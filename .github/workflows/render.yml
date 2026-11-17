@@ -1,0 +1,59 @@
+name: Montage d'un contenu
+
+on:
+  workflow_dispatch:
+    inputs:
+      numero:
+        description: "Numero du contenu sur 3 chiffres (ex. 002)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: montage
+  cancel-in-progress: false
+
+jobs:
+  montage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NUMERO: ${{ inputs.numero }}
+      VIDEO_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/videos/contenu-${{ inputs.numero }}.mp4
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      N8N_WEBHOOK_URL: https://mouhax.app.n8n.cloud/webhook/influenceuse-rendu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer ffmpeg et la voix
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          pip install --quiet "edge-tts>=7,<8"
+
+      - name: Monter la video
+        run: python scripts/render.py "$NUMERO"
+
+      - name: Publier la video sur GitHub Pages
+        run: |
+          git config user.name "montage-bot"
+          git config user.email "montage-bot@users.noreply.github.com"
+          git add "docs/videos/contenu-$NUMERO.mp4"
+          git commit -m "Video du contenu $NUMERO"
+          git pull --rebase
+          git push
+
+      - name: Prevenir n8n (succes)
+        run: |
+          DUREE=$(python -c "import json;print(json.load(open('resultat.json'))['duree_s'])")
+          curl -sS --fail -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"ok\":true,\"numero\":\"$NUMERO\",\"video_url\":\"$VIDEO_URL\",\"duree_s\":$DUREE,\"run_url\":\"$RUN_URL\"}"
+
+      - name: Prevenir n8n (echec)
+        if: failure()
+        run: |
+          curl -sS -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"ok\":false,\"numero\":\"$NUMERO\",\"erreur\":\"Montage en echec, voir le run GitHub\",\"run_url\":\"$RUN_URL\"}"
